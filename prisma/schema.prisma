@@ -1,0 +1,529 @@
+// Prisma Schema for UniMerchant
+// Corporate Merchandising & Procurement Operations Management System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleName {
+  SALES
+  PROCUREMENT
+  ADMIN
+  FINANCE
+  MANAGER
+}
+
+enum LeadStage {
+  PROSPECT
+  CONTACTED
+  REQUIREMENT_GATHERING
+  QUOTATION_SENT
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum OrderStatus {
+  LEAD
+  SOURCING
+  QUOTATION
+  NEGOTIATION
+  DEAL
+  PRODUKSI
+  KIRIM
+  SELESAI
+  CANCELLED
+}
+
+enum OrderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ItemCategory {
+  TUMBLER
+  T_SHIRT
+  ATK
+  GIFTBOX
+  OTHER
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REVISED
+  REJECTED
+}
+
+enum DocumentCategory {
+  PERIZINAN
+  PAJAK_FAKTUR
+  DESIGN_MOCKUP
+  SURAT_JALAN
+  BAST
+  INVOICE
+  SURAT_PENAWARAN
+  OTHER
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum PaymentType {
+  DOWN_PAYMENT
+  PARTIAL
+  FULL_PAYMENT
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  GIRO
+  VIRTUAL_ACCOUNT
+  CASH
+}
+
+enum PaymentStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationType {
+  TOP_REMINDER
+  ORDER_STATUS
+  QUOTATION_ALERT
+  PAYMENT_VERIFICATION
+  GENERAL
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  PERMIT
+  SICK
+  ABSENT
+}
+
+// -------------------------------------------------------------
+// 1. USER & RBAC
+// -------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  phone        String?
+  department   String?
+  avatarUrl    String?
+  roleId       String
+  role         Role      @relation(fields: [roleId], references: [id])
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assignedLeads    Lead[]             @relation("AssignedSales")
+  salesOrders      Order[]            @relation("SalesUser")
+  statusLogs       OrderStatusLog[]
+  createdQuotes    Quotation[]        @relation("QuoteAuthor")
+  quoteRevisions   QuotationRevision[]
+  uploadedDocs     Document[]
+  verifiedPayments Payment[]          @relation("PaymentVerifier")
+  notifications    Notification[]
+  attendances      Attendance[]
+  updatedSOPs      SOP[]
+  auditLogs        AuditLog[]
+
+  @@index([email])
+  @@index([roleId])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        RoleName @unique
+  displayName String
+  description String?
+  permissions Json     // List of permission keys e.g. ["orders.read", "orders.create", ...]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+// -------------------------------------------------------------
+// 2. CUSTOMER & LEADS
+// -------------------------------------------------------------
+
+model Customer {
+  id            String    @id @default(uuid())
+  companyName   String
+  contactPerson String
+  email         String
+  phone         String
+  address       String
+  npwp          String?   // Nomor Pokok Wajib Pajak
+  topDays       Int       @default(30) // Term of Payment default: 30 or 45 days
+  creditLimit   Decimal   @default(0.00) @db.Decimal(15, 2)
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  leads    Lead[]
+  orders   Order[]
+  invoices Invoice[]
+
+  @@index([companyName])
+}
+
+model Lead {
+  id               String      @id @default(uuid())
+  leadNumber       String      @unique // e.g. LD-2026-0001
+  title            String
+  customerId       String
+  customer         Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  assignedUserId   String?
+  assignedUser     User?       @relation("AssignedSales", fields: [assignedUserId], references: [id])
+  estimatedValue   Decimal     @default(0.00) @db.Decimal(15, 2)
+  expectedDeadline DateTime?
+  stage            LeadStage   @default(PROSPECT)
+  source           String?     // e.g. Direct Inbound, Tender, Expo
+  notes            String?     @db.Text
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  orders Order[]
+
+  @@index([customerId])
+  @@index([stage])
+}
+
+// -------------------------------------------------------------
+// 3. ORDERS & ITEMS
+// -------------------------------------------------------------
+
+model Order {
+  id                 String        @id @default(uuid())
+  orderNumber        String        @unique // e.g. ORD-2026-0001
+  leadId             String?
+  lead               Lead?         @relation(fields: [leadId], references: [id])
+  customerId         String
+  customer           Customer      @relation(fields: [customerId], references: [id])
+  salesUserId        String
+  salesUser          User          @relation("SalesUser", fields: [salesUserId], references: [id])
+  status             OrderStatus   @default(LEAD)
+  priority           OrderPriority @default(MEDIUM)
+  deadlineDate       DateTime
+  deliveryAddress    String?       @db.Text
+  totalCost          Decimal       @default(0.00) @db.Decimal(15, 2)
+  totalMargin        Decimal       @default(0.00) @db.Decimal(15, 2)
+  totalSellingPrice  Decimal       @default(0.00) @db.Decimal(15, 2)
+  notes              String?       @db.Text
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  items        OrderItem[]
+  statusLogs   OrderStatusLog[]
+  quotations   Quotation[]
+  invoices     Invoice[]
+  payments     Payment[]
+  documents    Document[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([orderNumber])
+}
+
+model OrderItem {
+  id                    String       @id @default(uuid())
+  orderId               String
+  order                 Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemName              String
+  category              ItemCategory @default(TUMBLER)
+  specification         String       @db.Text // Color, material, logo technique, packaging
+  quantity              Int
+  unit                  String       @default("pcs")
+  customDesignUrl       String?
+  targetBudgetPerUnit   Decimal      @default(0.00) @db.Decimal(15, 2)
+  procurementCostPerUnit Decimal     @default(0.00) @db.Decimal(15, 2)
+  sellingPricePerUnit   Decimal      @default(0.00) @db.Decimal(15, 2)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  vendorPrices VendorPrice[]
+
+  @@index([orderId])
+}
+
+model OrderStatusLog {
+  id             String      @id @default(uuid())
+  orderId        String
+  order          Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  previousStatus OrderStatus
+  newStatus      OrderStatus
+  changedById    String
+  changedBy      User        @relation(fields: [changedById], references: [id])
+  notes          String?     @db.Text
+  createdAt      DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+// -------------------------------------------------------------
+// 4. VENDOR & SOURCING
+// -------------------------------------------------------------
+
+model Vendor {
+  id            String   @id @default(uuid())
+  name          String
+  contactPerson String
+  email         String
+  phone         String
+  address       String   @db.Text
+  categories    String   // Comma-separated or tag list e.g. "Tumbler, Souvenir"
+  rating        Float    @default(4.5)
+  leadTimeDays  Int      @default(7)
+  paymentTerms  String?  // e.g. "DP 50%, Cash Before Delivery"
+  bankDetails   String?  @db.Text
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  prices VendorPrice[]
+
+  @@index([name])
+}
+
+model VendorPrice {
+  id              String    @id @default(uuid())
+  orderItemId     String
+  orderItem       OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  vendorId        String
+  vendor          Vendor    @relation(fields: [vendorId], references: [id])
+  unitPrice       Decimal   @db.Decimal(15, 2)
+  minOrderQty     Int       @default(1)
+  leadTimeDays    Int       @default(7)
+  validUntil      DateTime?
+  sampleAvailable Boolean   @default(false)
+  isSelected      Boolean   @default(false)
+  notes           String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([orderItemId])
+  @@index([vendorId])
+}
+
+// -------------------------------------------------------------
+// 5. QUOTATION & REVISIONS
+// -------------------------------------------------------------
+
+model Quotation {
+  id                 String          @id @default(uuid())
+  quotationNumber    String          @unique // e.g. SP/MF/2026/10/0001
+  orderId            String
+  order              Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  version            Int             @default(1)
+  totalCost          Decimal         @default(0.00) @db.Decimal(15, 2)
+  marginPercentage   Decimal         @default(25.00) @db.Decimal(5, 2)
+  totalMargin        Decimal         @default(0.00) @db.Decimal(15, 2)
+  subTotal           Decimal         @default(0.00) @db.Decimal(15, 2)
+  taxPercentage      Decimal         @default(11.00) @db.Decimal(5, 2) // PPN 11%
+  taxAmount          Decimal         @default(0.00) @db.Decimal(15, 2)
+  grandTotal         Decimal         @default(0.00) @db.Decimal(15, 2)
+  paymentTerms       String          @default("DP 50%, Pelunasan TOP 30 Hari")
+  validUntil         DateTime
+  termsAndConditions String?         @db.Text
+  notes              String?         @db.Text
+  status             QuotationStatus @default(DRAFT)
+  createdById        String
+  createdBy          User            @relation("QuoteAuthor", fields: [createdById], references: [id])
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  revisions QuotationRevision[]
+
+  @@index([orderId])
+  @@index([quotationNumber])
+}
+
+model QuotationRevision {
+  id             String    @id @default(uuid())
+  quotationId    String
+  quotation      Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  revisionNumber Int
+  snapshotData   Json      // Full serialized JSON state of quotation items & totals
+  reasonForChange String   @db.Text
+  changedById    String
+  changedBy      User      @relation(fields: [changedById], references: [id])
+  createdAt      DateTime  @default(now())
+
+  @@index([quotationId])
+}
+
+// -------------------------------------------------------------
+// 6. DOCUMENTS & REVISION AUDIT
+// -------------------------------------------------------------
+
+model Document {
+  id           String           @id @default(uuid())
+  orderId      String?
+  order        Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  title        String
+  category     DocumentCategory @default(OTHER)
+  fileUrl      String
+  fileSize     Int              // In bytes
+  mimeType     String
+  version      Int              @default(1)
+  description  String?          @db.Text
+  uploadedById String
+  uploadedBy   User             @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([orderId])
+  @@index([category])
+}
+
+// -------------------------------------------------------------
+// 7. INVOICE, PAYMENTS & TOP RECEIVABLES
+// -------------------------------------------------------------
+
+model Invoice {
+  id                   String        @id @default(uuid())
+  invoiceNumber        String        @unique // e.g. INV-2026-0001
+  orderId              String
+  order                Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId           String
+  customer             Customer      @relation(fields: [customerId], references: [id])
+  issueDate            DateTime
+  dueDate              DateTime      // issueDate + topDays
+  topDays              Int           @default(30) // 30 or 45 days
+  totalAmount          Decimal       @db.Decimal(15, 2)
+  paidAmount           Decimal       @default(0.00) @db.Decimal(15, 2)
+  balanceAmount        Decimal       @db.Decimal(15, 2) // totalAmount - paidAmount
+  status               InvoiceStatus @default(UNPAID)
+  reminderH7Sent       Boolean       @default(false)
+  reminderH3Sent       Boolean       @default(false)
+  reminderH0Sent       Boolean       @default(false)
+  reminderOverdueSent  Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  payments Payment[]
+
+  @@index([orderId])
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model Payment {
+  id                 String        @id @default(uuid())
+  paymentNumber      String        @unique // e.g. PAY-2026-0001
+  invoiceId          String
+  invoice            Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  orderId            String
+  order              Order         @relation(fields: [orderId], references: [id])
+  amount             Decimal       @db.Decimal(15, 2)
+  paymentType        PaymentType   @default(DOWN_PAYMENT)
+  paymentMethod      PaymentMethod @default(BANK_TRANSFER)
+  paymentDate        DateTime
+  proofOfPaymentUrl  String?
+  referenceNumber    String?       // Bank transfer ref
+  status             PaymentStatus @default(PENDING_VERIFICATION)
+  notes              String?       @db.Text
+  verifiedById       String?
+  verifiedBy         User?         @relation("PaymentVerifier", fields: [verifiedById], references: [id])
+  verifiedAt         DateTime?
+  createdAt          DateTime      @default(now())
+
+  @@index([invoiceId])
+  @@index([orderId])
+  @@index([status])
+}
+
+// -------------------------------------------------------------
+// 8. NOTIFICATIONS & EMPLOYEE PORTAL (SOP & ATTENDANCE)
+// -------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String           @db.Text
+  type      NotificationType @default(GENERAL)
+  linkUrl   String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model Attendance {
+  id            String           @id @default(uuid())
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date          DateTime         @db.Date
+  clockIn       DateTime
+  clockOut      DateTime?
+  clockInNotes  String?
+  clockOutNotes String?
+  status        AttendanceStatus @default(PRESENT)
+  latitude      Float?
+  longitude     Float?
+  createdAt     DateTime         @default(now())
+
+  @@index([userId])
+  @@index([date])
+}
+
+model SOP {
+  id               String   @id @default(uuid())
+  code             String   @unique // e.g. SOP-OPS-001
+  title            String
+  category         String   // Sales, Procurement, Quality Control, Finance
+  content          String   @db.Text // Full markdown
+  tags             String   // "tumbler, vendor, sampling"
+  version          Int      @default(1)
+  lastUpdatedById  String
+  lastUpdatedBy    User     @relation(fields: [lastUpdatedById], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([category])
+  @@index([code])
+}
+
+// -------------------------------------------------------------
+// 9. AUDIT LOG (ACTIVITY HISTORY)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action        String   // CREATE, UPDATE, DELETE, APPROVE, REJECT, EXPORT_PDF
+  entityName    String   // Lead, Order, Quotation, Payment, Invoice
+  entityId      String
+  previousState Json?
+  newState      Json?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityName, entityId])
+}
